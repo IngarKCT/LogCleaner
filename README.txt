@@ -35,6 +35,6 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LogCleaner
 		Only delete files in derectories with a total size in megabytes (MiB) larger than this. Can be 0!
 		  
 	CleanDirectories
-		List of directories to watch. Every minute, the service will check each directory for size, and delete old files accordingly.
-		If both CleanAgeMinutes and CleanSizeMegabytes are 0, the service will essentially just delete all files in them.
-
+		List of directories to watch. Every minute, the service will check each directory for size, 
+		and delete old files accordingly. If both CleanAgeMinutes and CleanSizeMegabytes are 0,
+		the service will essentially just delete all files in them.
