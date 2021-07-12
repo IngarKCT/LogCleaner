@@ -223,6 +223,8 @@ namespace LogCleaner
                 if (Directory.Exists(dir))
                 {
                     // directory exists, calculate total size
+                    // TODO add files in subdirectories to cleaning list
+                    // TODO remove empty subdirectories
                     long dirsize = 0;
 
                     DirectoryInfo dirinfo = new DirectoryInfo(dir);
@@ -260,7 +262,7 @@ namespace LogCleaner
                             {
                                 if (logLevel > 1)
                                 {
-                                    eventlog.WriteEntry("Deleting " + f.FullName + " age " + Math.Floor(elapsed.TotalMinutes) + " minutes", EventLogEntryType.Warning, eventId);
+                                    eventlog.WriteEntry("Deleting " + f.FullName + " age " + Math.Floor(elapsed.TotalMinutes) + " minutes", EventLogEntryType.Information, eventId);
                                 }
 
                                 // subtract the size from the file to be deleted from the total directory size
@@ -269,8 +271,15 @@ namespace LogCleaner
                                 // make sure we're not in test mode
                                 if (testMode == 0)
                                 {
-                                    // really delete here
-                                    File.Delete(f.FullName);
+                                    try
+                                    {
+                                        // really delete here
+                                        File.Delete(f.FullName);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        eventlog.WriteEntry("Could not delete file " + f.FullName + " " + ex.Message, EventLogEntryType.Error, eventId);
+                                    }
                                 }
 
                             }
