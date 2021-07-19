@@ -163,27 +163,29 @@ namespace LogCleaner
             // scan subdirectories
             string[] subdirlist = Directory.GetDirectories(dirfullname);
             for (int s = 0; s < subdirlist.Length; ++s)
-            {              
+            {
                 dirsize += scanSubdirectories(subdirlist[s], globalfileinfolist);
 
-                if (testMode == 0)
+                if ((Directory.GetFiles(subdirlist[s]).Length == 0) && (Directory.GetDirectories(subdirlist[s]).Length == 0))
                 {
-                    if ( (Directory.GetFiles(subdirlist[s]).Length == 0) && (Directory.GetDirectories(subdirlist[s]).Length == 0))
+                    // delete empty subdirectories (only if they were already empty)
+                    if (logLevel > 1)
                     {
-                        // delete empty subdirectories (only if they were already empty)
+                        eventlog.WriteEntry("Removing empty directory " + subdirlist[s], EventLogEntryType.Information, eventId);
+                    }
+                    // make sure we're not in test mode
+                    if (testMode == 0)
+                    {
                         try
                         {
-                            if (logLevel > 1)
-                            {
-                                eventlog.WriteEntry("Removing empty directory " + subdirlist[s], EventLogEntryType.Information, eventId);
-                            }
+                            // delete directory
                             Directory.Delete(subdirlist[s]);
                         }
                         catch (Exception ex)
                         {
                             eventlog.WriteEntry("Could not delete directory " + subdirlist[s] + " " + ex.Message, EventLogEntryType.Error, eventId);
                         }
-                    } 
+                    }
                 }
             }
 
@@ -236,7 +238,7 @@ namespace LogCleaner
                         {
                             try
                             {
-                                // really delete here
+                                // delete file
                                 File.Delete(f.FullName);
                             }
                             catch (Exception ex)
