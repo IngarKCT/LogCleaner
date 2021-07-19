@@ -66,7 +66,9 @@ namespace LogCleaner
         private int testMode = 0;
 
         // run cleanup every 5 minutes (300 seconds)
-        private int cleanIntervalSeconds = 300;
+        const int cleanIntervalSecondsDefault = 300;
+
+        private int cleanIntervalSeconds = cleanIntervalSecondsDefault;
 
         // clean up files older than 1 day (60 minutes * 24 hours)
         private int cleanAgeMinutes = 60 * 24;
@@ -78,7 +80,7 @@ namespace LogCleaner
         private string[] directories = { };
 
         // location of the configuration
-        private string configregkey = "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\LogCleaner";
+        const string configregkey = "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\LogCleaner";
 
         [DllImport("advapi32.dll", SetLastError = true)]
         private static extern bool SetServiceStatus(System.IntPtr handle, ref ServiceStatus serviceStatus);
@@ -119,6 +121,11 @@ namespace LogCleaner
             {
                 eventlog.WriteEntry("Could not read Service configuration " + ex.Message , EventLogEntryType.Warning, eventId);
             }
+
+            if (cleanIntervalSeconds <= 0)
+            {
+                cleanIntervalSeconds = cleanIntervalSecondsDefault;
+            }
         }
 
         private void WriteSettings()
@@ -141,11 +148,121 @@ namespace LogCleaner
 
         }
 
+        private long scanSubdirectories(string dirfullname, List<FileInfo> globalfileinfolist)
+        {
+            // calculate total size of all files in the parent directory
+            long dirsize = 0;
+            DirectoryInfo dirinfo = new DirectoryInfo(dirfullname);
+            FileInfo[] fileinfo = dirinfo.GetFiles();
+            foreach (FileInfo f in fileinfo)
+            {
+                globalfileinfolist.Add(f);
+                dirsize += f.Length;
+            }
+
+            // scan subdirectories
+            string[] subdirlist = Directory.GetDirectories(dirfullname);
+            for (int s = 0; s < subdirlist.Length; ++s)
+            {              
+                dirsize += scanSubdirectories(subdirlist[s], globalfileinfolist);
+
+                if (testMode == 0)
+                {
+                    if ( (Directory.GetFiles(subdirlist[s]).Length == 0) && (Directory.GetDirectories(subdirlist[s]).Length == 0))
+                    {
+                        // delete empty subdirectories (only if they were already empty)
+                        try
+                        {
+                            if (logLevel > 1)
+                            {
+                                eventlog.WriteEntry("Removing empty directory " + subdirlist[s], EventLogEntryType.Information, eventId);
+                            }
+                            Directory.Delete(subdirlist[s]);
+                        }
+                        catch (Exception ex)
+                        {
+                            eventlog.WriteEntry("Could not delete directory " + subdirlist[s] + " " + ex.Message, EventLogEntryType.Error, eventId);
+                        }
+                    } 
+                }
+            }
+
+            return dirsize;
+        }
+
+        private void scanDirectory(string dirfullname)
+        {
+            List<FileInfo> fileinfolist = new List<FileInfo>();
+
+            // calculate disk usage if this directory (including files in subdirectories)
+            long dirsize = scanSubdirectories(dirfullname, fileinfolist);
+
+            // size in megabytes
+            if (dirsize >= cleanSizeMegabytes * 1024 * 1024)
+            {
+                if (logLevel > 1)
+                {
+                    eventlog.WriteEntry("Directory " + dirfullname + " contains " + (dirsize / (1024 * 1024)) + " MiB and exceeds " + cleanSizeMegabytes + " MiB", EventLogEntryType.Warning, eventId);
+                }
+                else if (logLevel > 0)
+                {
+                    eventlog.WriteEntry("Cleaning " + dirfullname, EventLogEntryType.Information, eventId);
+                }
+
+                // sort files by Last Write time, oldest first
+                WriteTimeComparer fileinfocompare = new WriteTimeComparer();
+                fileinfolist.Sort(fileinfocompare);
+
+                DateTime now = DateTime.Now;
+
+                foreach (FileInfo f in fileinfolist)
+                {
+                    // caculate the age of the file in minutes
+                    long ticks = now.Ticks - f.LastWriteTime.Ticks;
+                    TimeSpan elapsed = new TimeSpan(ticks);
+
+                    if ((elapsed.TotalMinutes >= cleanAgeMinutes) && (dirsize >= cleanSizeMegabytes * 1024 * 1024))
+                    {
+                        if (logLevel > 1)
+                        {
+                            eventlog.WriteEntry("Deleting " + f.FullName + " age " + Math.Floor(elapsed.TotalMinutes) + " minutes", EventLogEntryType.Information, eventId);
+                        }
+
+                        // subtract the size from the file to be deleted from the total directory size
+                        dirsize -= f.Length;
+
+                        // make sure we're not in test mode
+                        if (testMode == 0)
+                        {
+                            try
+                            {
+                                // really delete here
+                                File.Delete(f.FullName);
+                            }
+                            catch (Exception ex)
+                            {
+                                eventlog.WriteEntry("Could not delete file " + f.FullName + " " + ex.Message, EventLogEntryType.Error, eventId);
+                            }
+                        }
+
+                    }
+                }
+            }
+            else
+            {
+                // size limit hasn't been exceeddd
+                if (logLevel > 1)
+                {
+                    eventlog.WriteEntry("Watching " + dirfullname + " " + (dirsize / (1024 * 1024)) + "MiB", EventLogEntryType.Information, eventId);
+                }
+            }
+        }
+
         protected override void OnStart(string[] args)
         {
             if (logLevel > 1)
             {
-                eventlog.WriteEntry("LogCleaner start");
+                eventlog.WriteEntry("LogCleaner cleaning every " + cleanIntervalSeconds.ToString() + " seconds.", EventLogEntryType.Information, eventId);
             }
 
             if (logLevel > 0)
@@ -216,88 +333,14 @@ namespace LogCleaner
                 eventlog.WriteEntry("Cleaning files older than " + cleanAgeMinutes + " minutes in directories larger than " + cleanSizeMegabytes + " MiB", EventLogEntryType.Information, eventId);
             }
 
-            for (int d=0; d<directories.Length; ++d)
+            for (int d = 0; d < directories.Length; ++d)
             {
                 string dir = directories[d];
 
                 if (Directory.Exists(dir))
                 {
-                    // directory exists, calculate total size
-                    // TODO add files in subdirectories to cleaning list
-                    // TODO remove empty subdirectories
-                    long dirsize = 0;
+                    scanDirectory(dir);
 
-                    DirectoryInfo dirinfo = new DirectoryInfo(dir);
-                    FileInfo[] fileinfo = dirinfo.GetFiles();
-                    foreach (FileInfo f in fileinfo)
-                    {
-                        dirsize += f.Length;
-                    }
-
-                    // size in megabytes
-                    if (dirsize >= cleanSizeMegabytes * 1024 * 1024)
-                    {
-                        if (logLevel > 1)
-                        {
-                            eventlog.WriteEntry("Directory " + dir + " contains " + (dirsize / (1024 * 1024)) + " MiB and exceeds " + cleanSizeMegabytes + " MiB", EventLogEntryType.Warning, eventId);
-                        }
-                        else if (logLevel > 0)
-                        {
-                            eventlog.WriteEntry("Cleaning " + dir, EventLogEntryType.Information, eventId);
-                        }
-
-                        // sort files by Last Write time, oldest first
-                        WriteTimeComparer fileinfocompare = new WriteTimeComparer();
-                        Array.Sort(fileinfo, fileinfocompare);
-
-                        DateTime now = DateTime.Now;
-
-                        foreach (FileInfo f in fileinfo)
-                        {
-                            // caculate the age of the file in minutes
-                            long ticks = now.Ticks - f.LastWriteTime.Ticks;
-                            TimeSpan elapsed = new TimeSpan(ticks);
-
-                            if ((elapsed.TotalMinutes >= cleanAgeMinutes) && (dirsize >= cleanSizeMegabytes * 1024 * 1024))
-                            {
-                                if (logLevel > 1)
-                                {
-                                    eventlog.WriteEntry("Deleting " + f.FullName + " age " + Math.Floor(elapsed.TotalMinutes) + " minutes", EventLogEntryType.Information, eventId);
-                                }
-
-                                // subtract the size from the file to be deleted from the total directory size
-                                dirsize -= f.Length;
-
-                                // make sure we're not in test mode
-                                if (testMode == 0)
-                                {
-                                    try
-                                    {
-                                        // really delete here
-                                        File.Delete(f.FullName);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        eventlog.WriteEntry("Could not delete file " + f.FullName + " " + ex.Message, EventLogEntryType.Error, eventId);
-                                    }
-                                }
-
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // size limit hasn't been exceeddd
-                        if (logLevel > 1)
-                        {
-                            eventlog.WriteEntry("Watching " + dir + " " + (dirsize / (1024 * 1024)) + "MiB", EventLogEntryType.Information, eventId);
-                        }
-                    }
-                }
-                else
-                {
-                    // directory to watch does not exist
-                    eventlog.WriteEntry("Directory " + dir + " does not exist", EventLogEntryType.Error, eventId);
                 }
             }
 
